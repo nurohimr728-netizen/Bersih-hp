@@ -26,16 +26,35 @@ class MainActivity : Activity() {
     private var files = listOf<File>()
     private val root: File = Environment.getExternalStorageDirectory()
     @Volatile private var scanning = false
+    private var ready = false
 
     override fun onCreate(b: Bundle?) {
         super.onCreate(b)
+        try {
+            build()
+            ready = true
+        } catch (e: Throwable) {
+            showErr(e)
+        }
+    }
+
+    private fun showErr(e: Throwable) {
+        val t = TextView(this)
+        t.text = "ERROR:\n" + android.util.Log.getStackTraceString(e)
+        t.textSize = 12f
+        t.setPadding(24, 80, 24, 24)
+        t.setTextIsSelectable(true)
+        setContentView(ScrollView(this).apply { addView(t) })
+    }
+
+    private fun build() {
         val d = resources.displayMetrics.density
         val pad = (16 * d).toInt()
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad * 2, pad, pad)
         }
-        col.addView(TextView(this).apply { text = "Bersih HP 📱"; textSize = 26f })
+        col.addView(TextView(this).apply { text = "Bersih HP"; textSize = 26f })
         info = TextView(this).apply { textSize = 15f; setPadding(0, pad / 2, 0, 0) }
         col.addView(info)
         bar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
@@ -44,30 +63,37 @@ class MainActivity : Activity() {
         row.addView(btn("File besar", 1f) { scan(0) })
         row.addView(btn("APK sisa", 1f) { scan(1) })
         row.addView(btn("Duplikat", 1f) { scan(2) })
-        col.addView(row)
+        col.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         status = TextView(this).apply {
             text = "Pilih jenis pemindaian di atas."
             setPadding(0, pad / 2, 0, pad / 2)
         }
         col.addView(status)
-        list = ListView(this).apply { choiceMode = ListView.CHOICE_MODE_MULTIPLE }
+        list = ListView(this)
+        list.choiceMode = ListView.CHOICE_MODE_MULTIPLE
         col.addView(list, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         delBtn = btn("Hapus yang dicentang", 0f) { confirmDelete() }
         delBtn.isEnabled = false
         col.addView(delBtn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(col)
+        refreshInfo()
     }
 
     override fun onResume() {
         super.onResume()
-        try { refreshInfo() } catch (e: Exception) { }
+        if (!ready) return
+        try { refreshInfo() } catch (e: Throwable) { }
     }
 
-    private fun btn(t: String, w: Float, f: () -> Unit) = Button(this).apply {
-        text = t
-        isAllCaps = false
-        setOnClickListener { f() }
-        if (w > 0f) layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, w)
+    private fun btn(t: String, w: Float, f: () -> Unit): Button {
+        val bt = Button(this)
+        bt.text = t
+        bt.isAllCaps = false
+        bt.setOnClickListener {
+            try { f() } catch (e: Throwable) { toast("Error: " + e.toString()) }
+        }
+        if (w > 0f) bt.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, w)
+        return bt
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_LONG).show()
@@ -85,7 +111,7 @@ class MainActivity : Activity() {
         val used = total - free
         info.text = "Terpakai ${fmt(used)} dari ${fmt(total)}  •  Sisa ${fmt(free)}"
         bar.max = 1000
-        bar.progress = (used * 1000 / total).toInt()
+        bar.progress = if (total > 0) (used * 1000 / total).toInt() else 0
     }
 
     private fun hasAccess(): Boolean =
@@ -94,7 +120,11 @@ class MainActivity : Activity() {
 
     private fun askAccess() {
         if (Build.VERSION.SDK_INT >= 30) {
-            startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+            try {
+                startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.parse("package:$packageName")))
+            } catch (e: Exception) {
+                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+            }
         } else {
             requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE), 1)
         }
@@ -120,7 +150,7 @@ class MainActivity : Activity() {
                     1 -> all().filter { it.extension.equals("apk", true) }.sortedByDescending { it.length() }.take(100).toList()
                     else -> dupes()
                 }
-            } catch (e: Exception) { emptyList() }
+            } catch (e: Throwable) { emptyList() }
             runOnUiThread { scanning = false; show(found) }
         }.start()
     }
@@ -156,7 +186,7 @@ class MainActivity : Activity() {
         files = found
         val labels = found.map { "${it.name}\n${fmt(it.length())}  •  ${it.parent?.removePrefix(root.path) ?: ""}" }
         list.adapter = ArrayAdapter(this, android.R.layout.simple_list_item_multiple_choice, labels)
-        status.text = if (found.isEmpty()) "Nggak ketemu apa-apa. Bersih! 🎉"
+        status.text = if (found.isEmpty()) "Nggak ketemu apa-apa. Bersih!"
         else "Ketemu ${found.size} file (${fmt(found.sumOf { it.length() })}). Centang yang mau dihapus."
         delBtn.isEnabled = found.isNotEmpty()
     }
@@ -179,7 +209,7 @@ class MainActivity : Activity() {
                     runOnUiThread {
                         refreshInfo()
                         show(files.filter { it.exists() })
-                        status.text = "Terhapus $ok file, lega ${fmt(freed)} 🎉"
+                        status.text = "Terhapus $ok file, lega ${fmt(freed)}"
                     }
                 }.start()
             }
